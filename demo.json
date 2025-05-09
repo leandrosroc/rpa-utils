@@ -1,0 +1,6 @@
+[
+  ["open_site_visible", "https://www.google.com.br"],
+  ["timesleep", 2],
+  ["write", "leandrosroc github"],
+  ["command", "enter"]
+]
