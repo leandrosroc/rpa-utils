@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+.env
+.DS_Store
+.vscode/
+.idea/
+*.bak
+*.swp
+*.swo
+*.~ 
+# Ignore Excel/CSV/TXT de exemplo
+exemplo.xlsx
+exemplo.csv
+exemplo.txt
