@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import threading
+import json
+import os
 
 import utils.pyautogui as upg
 import utils.selenium as us
@@ -79,6 +81,11 @@ class AutomationBuilder:
         tk.Button(self.button_frame, text="Executar JS (Selenium)", command=self.add_js).pack(fill='x')
         tk.Button(self.button_frame, text="Executar JS (Selenium visível)", command=self.add_js_visible).pack(fill='x')
         tk.Button(self.button_frame, text="Ler Arquivo Excel", command=self.add_read_excel).pack(fill='x')
+        tk.Button(self.button_frame, text="Unir XLSX", command=self.merge_xlsx).pack(fill='x')
+        tk.Button(self.button_frame, text="Unir CSV", command=self.merge_csv).pack(fill='x')
+        tk.Button(self.button_frame, text="Unir TXT", command=self.merge_txt).pack(fill='x')
+        tk.Button(self.button_frame, text="Salvar Fluxo", command=self.save_flow).pack(fill='x', pady=(10,0))
+        tk.Button(self.button_frame, text="Restaurar Fluxo", command=self.load_flow).pack(fill='x')
         tk.Button(self.button_frame, text="Executar Automação", command=self.run_steps).pack(fill='x', pady=(10,0))
         tk.Button(self.button_frame, text="Limpar Passos", command=self.clear_steps).pack(fill='x')
     
@@ -190,11 +197,101 @@ class AutomationBuilder:
         tk.Button(top, text="OK", command=ok).pack()
     
     def add_read_excel(self):
-        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
+        top = tk.Toplevel(self.master)
+        top.title("Ler Excel Avançado")
+        files = []
+
+        def add_file():
+            path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
+            if path:
+                files.append(path)
+                files_list.insert('end', path)
+
+        tk.Label(top, text="Arquivos Excel:").pack()
+        files_list = tk.Listbox(top, width=50)
+        files_list.pack()
+        tk.Button(top, text="Adicionar Arquivo", command=add_file).pack()
+
+        tk.Label(top, text="Linha(s) (ex: 2, 2-5):").pack()
+        row_entry = tk.Entry(top)
+        row_entry.pack()
+        tk.Label(top, text="Coluna(s) (ex: B, B-D, 2, 2-4):").pack()
+        col_entry = tk.Entry(top)
+        col_entry.pack()
+        tk.Label(top, text="Ação (ex: digitar, clicar, comando):").pack()
+        action_entry = tk.Entry(top)
+        action_entry.pack()
+        tk.Label(top, text="Parâmetro da ação (ex: texto, comando):").pack()
+        param_entry = tk.Entry(top)
+        param_entry.pack()
+
+        def ok():
+            if files:
+                step = {
+                    'type': 'read_excel_advanced',
+                    'files': files.copy(),
+                    'rows': row_entry.get(),
+                    'cols': col_entry.get(),
+                    'action': action_entry.get(),
+                    'param': param_entry.get()
+                }
+                self.steps.append(step)
+                self.listbox.insert('end', f"Ler Excel Avançado: {files} Linhas:{step['rows']} Cols:{step['cols']} Ação:{step['action']} Param:{step['param']}")
+            top.destroy()
+        tk.Button(top, text="OK", command=ok).pack()
+
+    def merge_xlsx(self):
+        files = filedialog.askopenfilenames(filetypes=[("Excel files", "*.xlsx")])
+        if files:
+            data = []
+            for f in files:
+                data.extend(uf.read_xlsx(f))
+            save_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
+            if save_path:
+                uf.write_xlsx(save_path, data)
+                messagebox.showinfo("Unir XLSX", f"Arquivos unidos em: {save_path}")
+
+    def merge_csv(self):
+        files = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
+        if files:
+            data = []
+            for f in files:
+                data.extend(uf.read_csv(f))
+            save_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+            if save_path:
+                uf.write_csv(save_path, data)
+                messagebox.showinfo("Unir CSV", f"Arquivos unidos em: {save_path}")
+
+    def merge_txt(self):
+        files = filedialog.askopenfilenames(filetypes=[("Text files", "*.txt")])
+        if files:
+            data = ""
+            for f in files:
+                data += uf.read_txt(f) + "\n"
+            save_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+            if save_path:
+                uf.write_txt(save_path, data)
+                messagebox.showinfo("Unir TXT", f"Arquivos unidos em: {save_path}")
+
+    def save_flow(self):
+        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
         if path:
-            self.steps.append(('read_excel', path))
-            self.listbox.insert('end', f"Ler Excel: {path}")
-    
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.steps, f, ensure_ascii=False, indent=2)
+            messagebox.showinfo("Salvar Fluxo", f"Fluxo salvo em: {path}")
+
+    def load_flow(self):
+        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                self.steps = json.load(f)
+            self.listbox.delete(0, 'end')
+            for step in self.steps:
+                if isinstance(step, dict) and step.get('type') == 'read_excel_advanced':
+                    self.listbox.insert('end', f"Ler Excel Avançado: {step['files']} Linhas:{step['rows']} Cols:{step['cols']} Ação:{step['action']} Param:{step['param']}")
+                else:
+                    self.listbox.insert('end', str(step))
+
     def clear_steps(self):
         self.steps.clear()
         self.listbox.delete(0, 'end')
@@ -204,7 +301,51 @@ class AutomationBuilder:
             driver = None
             driver_visible = None
             for step in self.steps:
-                if step[0] == 'click':
+                if isinstance(step, dict) and step.get('type') == 'read_excel_advanced':
+                    # Simplificação: só lê e executa ação nas células especificadas
+                    for file in step['files']:
+                        data = uf.read_xlsx(file)
+                        # Interpretação de linhas/colunas
+                        def parse_range(val):
+                            if '-' in val:
+                                a, b = val.split('-')
+                                try:
+                                    return list(range(int(a), int(b)+1))
+                                except:
+                                    # Letras
+                                    return [chr(c) for c in range(ord(a.upper()), ord(b.upper())+1)]
+                            elif ',' in val:
+                                return [v.strip() for v in val.split(',')]
+                            elif val:
+                                try:
+                                    return [int(val)]
+                                except:
+                                    return [val]
+                            return []
+                        rows = parse_range(step.get('rows',''))
+                        cols = parse_range(step.get('cols',''))
+                        # Se não especificado, pega tudo
+                        if not rows: rows = range(1, len(data))
+                        if not cols: cols = range(len(data[0]))
+                        for r in rows:
+                            for c in cols:
+                                try:
+                                    # Suporte a letras de coluna
+                                    if isinstance(c, str) and c.isalpha():
+                                        cidx = ord(c.upper()) - ord('A')
+                                    else:
+                                        cidx = int(c)
+                                    val = data[int(r)][cidx]
+                                except Exception:
+                                    val = ""
+                                if step['action'] == 'digitar':
+                                    upg.write(str(val))
+                                elif step['action'] == 'clicar':
+                                    upg.click(str(val))
+                                elif step['action'] == 'comando':
+                                    upg.press(str(val))
+                                # Adicione outras ações conforme necessário
+                elif step[0] == 'click':
                     upg.click(step[1], step[2])
                 elif step[0] == 'click_image':
                     pos = upg.locate_on_screen(step[1])
@@ -238,10 +379,11 @@ class AutomationBuilder:
                 elif step[0] == 'read_excel':
                     data = uf.read_xlsx(step[1])
                     messagebox.showinfo("Excel", f"Conteúdo: {data}")
-            if driver:
-                us.close(driver)
-            if driver_visible:
-                us.close(driver_visible)
+            # Não fechar drivers automaticamente!
+            # if driver:
+            #     us.close(driver)
+            # if driver_visible:
+            #     us.close(driver_visible)
             messagebox.showinfo("Automação", "Fluxo finalizado!")
         threading.Thread(target=runner).start()
 
