@@ -17,6 +17,13 @@ def run_selenium_example():
     us.close(driver)
     messagebox.showinfo("Selenium", f"Título da página: {title}")
 
+def run_selenium_example_visible():
+    driver = us.start_chrome(headless=False)
+    us.go_to(driver, "https://www.python.org")
+    title = driver.title
+    us.close(driver)
+    messagebox.showinfo("Selenium (visível)", f"Título da página: {title}")
+
 def run_excel_example():
     data = [["Nome", "Idade"], ["Ana", 30], ["João", 25]]
     uf.write_xlsx("exemplo.xlsx", data)
@@ -41,6 +48,13 @@ def run_js_example():
     us.close(driver)
     messagebox.showinfo("JavaScript", f"Título via JS: {result}")
 
+def run_js_example_visible():
+    driver = us.start_chrome(headless=False)
+    us.go_to(driver, "https://www.example.com")
+    result = us.execute_js(driver, "return document.title;")
+    us.close(driver)
+    messagebox.showinfo("JavaScript (visível)", f"Título via JS: {result}")
+
 def run_threaded(func):
     threading.Thread(target=func).start()
 
@@ -61,7 +75,9 @@ class AutomationBuilder:
         tk.Button(self.button_frame, text="Adicionar Digitação", command=self.add_write).pack(fill='x')
         tk.Button(self.button_frame, text="Adicionar Comando", command=self.add_command).pack(fill='x')
         tk.Button(self.button_frame, text="Abrir Site (Selenium)", command=self.add_open_site).pack(fill='x')
+        tk.Button(self.button_frame, text="Abrir Site (Selenium visível)", command=self.add_open_site_visible).pack(fill='x')
         tk.Button(self.button_frame, text="Executar JS (Selenium)", command=self.add_js).pack(fill='x')
+        tk.Button(self.button_frame, text="Executar JS (Selenium visível)", command=self.add_js_visible).pack(fill='x')
         tk.Button(self.button_frame, text="Ler Arquivo Excel", command=self.add_read_excel).pack(fill='x')
         tk.Button(self.button_frame, text="Executar Automação", command=self.run_steps).pack(fill='x', pady=(10,0))
         tk.Button(self.button_frame, text="Limpar Passos", command=self.clear_steps).pack(fill='x')
@@ -134,6 +150,19 @@ class AutomationBuilder:
             top.destroy()
         tk.Button(top, text="OK", command=ok).pack()
     
+    def add_open_site_visible(self):
+        top = tk.Toplevel(self.master)
+        top.title("Abrir Site (visível)")
+        tk.Label(top, text="URL:").pack()
+        entry = tk.Entry(top, width=40)
+        entry.pack()
+        def ok():
+            url = entry.get()
+            self.steps.append(('open_site_visible', url))
+            self.listbox.insert('end', f"Abrir site (visível): {url}")
+            top.destroy()
+        tk.Button(top, text="OK", command=ok).pack()
+
     def add_js(self):
         top = tk.Toplevel(self.master)
         top.title("Executar JS")
@@ -144,6 +173,19 @@ class AutomationBuilder:
             js = entry.get()
             self.steps.append(('js', js))
             self.listbox.insert('end', f"Executar JS: {js}")
+            top.destroy()
+        tk.Button(top, text="OK", command=ok).pack()
+    
+    def add_js_visible(self):
+        top = tk.Toplevel(self.master)
+        top.title("Executar JS (visível)")
+        tk.Label(top, text="JavaScript:").pack()
+        entry = tk.Entry(top, width=40)
+        entry.pack()
+        def ok():
+            js = entry.get()
+            self.steps.append(('js_visible', js))
+            self.listbox.insert('end', f"Executar JS (visível): {js}")
             top.destroy()
         tk.Button(top, text="OK", command=ok).pack()
     
@@ -160,6 +202,7 @@ class AutomationBuilder:
     def run_steps(self):
         def runner():
             driver = None
+            driver_visible = None
             for step in self.steps:
                 if step[0] == 'click':
                     upg.click(step[1], step[2])
@@ -180,16 +223,25 @@ class AutomationBuilder:
                         upg.hotkey(*keys)
                 elif step[0] == 'open_site':
                     if not driver:
-                        driver = us.start_chrome(headless=False)
+                        driver = us.start_chrome(headless=True)
                     us.go_to(driver, step[1])
+                elif step[0] == 'open_site_visible':
+                    if not driver_visible:
+                        driver_visible = us.start_chrome(headless=False)
+                    us.go_to(driver_visible, step[1])
                 elif step[0] == 'js':
                     if driver:
                         us.execute_js(driver, step[1])
+                elif step[0] == 'js_visible':
+                    if driver_visible:
+                        us.execute_js(driver_visible, step[1])
                 elif step[0] == 'read_excel':
                     data = uf.read_xlsx(step[1])
                     messagebox.showinfo("Excel", f"Conteúdo: {data}")
             if driver:
                 us.close(driver)
+            if driver_visible:
+                us.close(driver_visible)
             messagebox.showinfo("Automação", "Fluxo finalizado!")
         threading.Thread(target=runner).start()
 
@@ -199,10 +251,12 @@ root.title("RPA Utils")
 tk.Label(root, text="Exemplos rápidos:").pack()
 tk.Button(root, text="PyAutoGUI: Digitar texto", command=lambda: run_threaded(run_pyautogui_example)).pack(fill='x')
 tk.Button(root, text="Selenium: Abrir página", command=lambda: run_threaded(run_selenium_example)).pack(fill='x')
+tk.Button(root, text="Selenium: Abrir página (visível)", command=lambda: run_threaded(run_selenium_example_visible)).pack(fill='x')
 tk.Button(root, text="Excel: Escrever/Ler", command=lambda: run_threaded(run_excel_example)).pack(fill='x')
 tk.Button(root, text="CSV: Escrever/Ler", command=lambda: run_threaded(run_csv_example)).pack(fill='x')
 tk.Button(root, text="TXT: Escrever/Ler", command=lambda: run_threaded(run_txt_example)).pack(fill='x')
 tk.Button(root, text="Selenium: Executar JS", command=lambda: run_threaded(run_js_example)).pack(fill='x')
+tk.Button(root, text="Selenium: Executar JS (visível)", command=lambda: run_threaded(run_js_example_visible)).pack(fill='x')
 
 tk.Label(root, text="").pack()
 tk.Label(root, text="Construa sua automação:").pack()
