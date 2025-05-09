@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox
 import threading
 import json
 import os
+import time
 
 import utils.pyautogui as upg
 import utils.selenium as us
@@ -84,11 +85,21 @@ class AutomationBuilder:
         tk.Button(self.button_frame, text="Unir XLSX", command=self.merge_xlsx).pack(fill='x')
         tk.Button(self.button_frame, text="Unir CSV", command=self.merge_csv).pack(fill='x')
         tk.Button(self.button_frame, text="Unir TXT", command=self.merge_txt).pack(fill='x')
+        tk.Button(self.button_frame, text="Adicionar Time Sleep", command=self.add_timesleep).pack(fill='x')
+        tk.Button(self.button_frame, text="Não fechar Selenium", command=self.add_no_close_selenium).pack(fill='x')
+        tk.Button(self.button_frame, text="Fechar Selenium", command=self.add_close_selenium).pack(fill='x')
         tk.Button(self.button_frame, text="Salvar Fluxo", command=self.save_flow).pack(fill='x', pady=(10,0))
         tk.Button(self.button_frame, text="Restaurar Fluxo", command=self.load_flow).pack(fill='x')
         tk.Button(self.button_frame, text="Executar Automação", command=self.run_steps).pack(fill='x', pady=(10,0))
         tk.Button(self.button_frame, text="Limpar Passos", command=self.clear_steps).pack(fill='x')
-    
+        
+        # Frame para botões de manipulação de passos
+        self.step_ctrl_frame = tk.Frame(self.frame)
+        self.step_ctrl_frame.pack(side='left', padx=5, pady=5, anchor='n')
+        tk.Button(self.step_ctrl_frame, text="↑ Subir", command=self.move_step_up, width=8).pack(pady=2)
+        tk.Button(self.step_ctrl_frame, text="↓ Descer", command=self.move_step_down, width=8).pack(pady=2)
+        tk.Button(self.step_ctrl_frame, text="🗑 Apagar", command=self.delete_step, width=8, fg="red").pack(pady=2)
+
     def add_click(self):
         top = tk.Toplevel(self.master)
         top.title("Adicionar Clique")
@@ -240,6 +251,31 @@ class AutomationBuilder:
             top.destroy()
         tk.Button(top, text="OK", command=ok).pack()
 
+    def add_timesleep(self):
+        top = tk.Toplevel(self.master)
+        top.title("Adicionar Time Sleep")
+        tk.Label(top, text="Tempo em segundos:").pack()
+        entry = tk.Entry(top, width=20)
+        entry.insert(0, "1")
+        entry.pack()
+        def ok():
+            try:
+                secs = float(entry.get())
+            except Exception:
+                secs = 1
+            self.steps.append(('timesleep', secs))
+            self.listbox.insert('end', f"Time Sleep: {secs}s")
+            top.destroy()
+        tk.Button(top, text="OK", command=ok).pack()
+
+    def add_no_close_selenium(self):
+        self.steps.append(('no_close_selenium',))
+        self.listbox.insert('end', "Não fechar Selenium")
+
+    def add_close_selenium(self):
+        self.steps.append(('close_selenium',))
+        self.listbox.insert('end', "Fechar Selenium")
+
     def merge_xlsx(self):
         files = filedialog.askopenfilenames(filetypes=[("Excel files", "*.xlsx")])
         if files:
@@ -300,6 +336,8 @@ class AutomationBuilder:
         def runner():
             driver = None
             driver_visible = None
+            close_driver = True
+            close_driver_visible = True
             for step in self.steps:
                 if isinstance(step, dict) and step.get('type') == 'read_excel_advanced':
                     # Simplificação: só lê e executa ação nas células especificadas
@@ -344,7 +382,6 @@ class AutomationBuilder:
                                     upg.click(str(val))
                                 elif step['action'] == 'comando':
                                     upg.press(str(val))
-                                # Adicione outras ações conforme necessário
                 elif step[0] == 'click':
                     upg.click(step[1], step[2])
                 elif step[0] == 'click_image':
@@ -379,13 +416,63 @@ class AutomationBuilder:
                 elif step[0] == 'read_excel':
                     data = uf.read_xlsx(step[1])
                     messagebox.showinfo("Excel", f"Conteúdo: {data}")
-            # Não fechar drivers automaticamente!
-            # if driver:
-            #     us.close(driver)
-            # if driver_visible:
-            #     us.close(driver_visible)
+                elif step[0] == 'timesleep':
+                    time.sleep(step[1])
+                elif step[0] == 'no_close_selenium':
+                    close_driver = False
+                    close_driver_visible = False
+                elif step[0] == 'close_selenium':
+                    if driver:
+                        us.close(driver)
+                        driver = None
+                    if driver_visible:
+                        us.close(driver_visible)
+                        driver_visible = None
+                    close_driver = True
+                    close_driver_visible = True
+            # Fechar drivers apenas se permitido
+            if close_driver and driver:
+                us.close(driver)
+            if close_driver_visible and driver_visible:
+                us.close(driver_visible)
             messagebox.showinfo("Automação", "Fluxo finalizado!")
         threading.Thread(target=runner).start()
+
+    def move_step_up(self):
+        sel = self.listbox.curselection()
+        if not sel or sel[0] == 0:
+            return
+        idx = sel[0]
+        self.steps[idx-1], self.steps[idx] = self.steps[idx], self.steps[idx-1]
+        txt = self.listbox.get(idx)
+        self.listbox.delete(idx)
+        self.listbox.insert(idx-1, txt)
+        self.listbox.selection_clear(0, 'end')
+        self.listbox.selection_set(idx-1)
+
+    def move_step_down(self):
+        sel = self.listbox.curselection()
+        if not sel or sel[0] == len(self.steps)-1:
+            return
+        idx = sel[0]
+        self.steps[idx+1], self.steps[idx] = self.steps[idx], self.steps[idx+1]
+        txt = self.listbox.get(idx)
+        self.listbox.delete(idx)
+        self.listbox.insert(idx+1, txt)
+        self.listbox.selection_clear(0, 'end')
+        self.listbox.selection_set(idx+1)
+
+    def delete_step(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        del self.steps[idx]
+        self.listbox.delete(idx)
+        # Seleciona o próximo passo, se existir
+        if self.listbox.size() > 0:
+            next_idx = min(idx, self.listbox.size()-1)
+            self.listbox.selection_set(next_idx)
 
 root = tk.Tk()
 root.title("RPA Utils")

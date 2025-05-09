@@ -17,7 +17,14 @@ def screenshot(path):
     pyautogui.screenshot(path)
 
 def locate_on_screen(image, confidence=0.8):
-    return pyautogui.locateCenterOnScreen(image, confidence=confidence)
+    while True:
+        try:
+            pos = pyautogui.locateCenterOnScreen(image, confidence=confidence)
+            if pos:
+                return pos
+        except Exception:
+            pass
+        time.sleep(0.5)
 
 def move_to(x, y, duration=0.25):
     pyautogui.moveTo(x, y, duration=duration)

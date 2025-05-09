@@ -9,8 +9,12 @@ def start_chrome(headless=False):
     driver = webdriver.Chrome(options=options)
     return driver
 
-def go_to(driver, url):
+def go_to(driver, url, timeout=30):
     driver.get(url)
+    from selenium.webdriver.support.ui import WebDriverWait
+    WebDriverWait(driver, timeout).until(
+        lambda d: d.execute_script('return document.readyState') == 'complete'
+    )
 
 def find_element(driver, by, value):
     return driver.find_element(by, value)
