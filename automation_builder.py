@@ -53,6 +53,26 @@ class AutomationBuilder:
 
         self._runner_thread = None
         self._stop_flag = threading.Event()
+        self.driver = None
+        self.driver_visible = None
+        self.close_driver = True
+        self.close_driver_visible = True
+
+        # Caixa de log
+        self.log_frame = tk.Frame(self.frame)
+        self.log_frame.pack(side='left', padx=5, fill='both', expand=True)
+        tk.Label(self.log_frame, text="Log de Execução:").pack(anchor='w')
+        self.log_text = tk.Text(self.log_frame, width=40, height=30, state='disabled', bg="#f8f8f8")
+        self.log_text.pack(fill='both', expand=True)
+        self.log_scroll = tk.Scrollbar(self.log_frame, command=self.log_text.yview)
+        self.log_scroll.pack(side='right', fill='y')
+        self.log_text.config(yscrollcommand=self.log_scroll.set)
+
+    def log(self, msg):
+        self.log_text.config(state='normal')
+        self.log_text.insert('end', msg + '\n')
+        self.log_text.see('end')
+        self.log_text.config(state='disabled')
 
     def add_click(self):
         top = tk.Toplevel(self.master)
@@ -318,11 +338,30 @@ class AutomationBuilder:
                 json.dump(self.steps, f, ensure_ascii=False, indent=2)
             messagebox.showinfo("Salvar Fluxo", f"Fluxo salvo em: {path}")
 
+    def _normalize_steps(self, steps):
+        normalized = []
+        for step in steps:
+            if isinstance(step, list):
+                # Converte listas simples para tuplas
+                if len(step) > 0 and isinstance(step[0], str):
+                    normalized.append(tuple(step))
+                else:
+                    normalized.append(step)
+            elif isinstance(step, dict) and step.get('type') == 'loop':
+                # Recursivo para steps dentro do loop
+                step = dict(step)
+                step['steps'] = self._normalize_steps(step['steps'])
+                normalized.append(step)
+            else:
+                normalized.append(step)
+        return normalized
+
     def load_flow(self):
         path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
         if path and os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
-                self.steps = json.load(f)
+                loaded = json.load(f)
+            self.steps = self._normalize_steps(loaded)
             self.listbox.delete(0, 'end')
             for step in self.steps:
                 if isinstance(step, dict) and step.get('type') == 'read_excel_advanced':
@@ -344,15 +383,21 @@ class AutomationBuilder:
         self._stop_flag.clear()
         self.run_btn.config(state='disabled')
         self.stop_btn.config(state='normal')
+        self.driver = None
+        self.driver_visible = None
+        self.close_driver = True
+        self.close_driver_visible = True
+        self.log_text.config(state='normal')
+        self.log_text.delete(1.0, 'end')
+        self.log_text.config(state='disabled')
+        self.log("Iniciando automação...")
         def runner():
-            driver = None
-            driver_visible = None
-            close_driver = True
-            close_driver_visible = True
             try:
-                self._execute_steps(self.steps, driver, driver_visible, close_driver, close_driver_visible)
+                self._execute_steps(self.steps)
+                self.log("Fluxo finalizado!")
                 messagebox.showinfo("Automação", "Fluxo finalizado!")
             except StopIteration:
+                self.log("Execução interrompida pelo usuário.")
                 messagebox.showinfo("Automação", "Execução interrompida pelo usuário.")
             finally:
                 self.run_btn.config(state='normal')
@@ -363,19 +408,27 @@ class AutomationBuilder:
     def stop_runner(self):
         self._stop_flag.set()
 
-    def _execute_steps(self, steps, driver, driver_visible, close_driver, close_driver_visible):
-        for step in steps:
+    def _execute_steps(self, steps):
+        for idx, step in enumerate(steps):
             if self._stop_flag.is_set():
+                self.log("Execução interrompida pelo usuário.")
                 raise StopIteration()
+            # Log do passo atual
+            self.log(f"Executando passo {idx+1}/{len(steps)}: {self._describe_step(step)}")
             if isinstance(step, dict) and step.get('type') == 'loop':
                 reps = step.get('repeat')
                 count = 0
+                self.log(f"Iniciando loop ({'∞' if reps is None else reps}x) com {len(step['steps'])} passos")
                 while reps is None or count < reps:
                     if self._stop_flag.is_set():
+                        self.log("Execução interrompida pelo usuário dentro do loop.")
                         raise StopIteration()
-                    self._execute_steps(step['steps'], driver, driver_visible, close_driver, close_driver_visible)
+                    self.log(f"Repetição do loop: {count+1}")
+                    self._execute_steps(step['steps'])
                     count += 1
+                self.log("Fim do loop")
             elif isinstance(step, dict) and step.get('type') == 'read_excel_advanced':
+                self.log("Executando leitura avançada de Excel (não exibido no log detalhado).")
                 for file in step['files']:
                     data = uf.read_xlsx(file)
                     def parse_range(val):
@@ -416,57 +469,86 @@ class AutomationBuilder:
                             elif step['action'] == 'comando':
                                 upg.press(str(val))
             elif isinstance(step, tuple) and step[0] == 'click':
+                self.log(f"Clique: {step[1]} ({step[2]}x)")
                 upg.click(step[1], step[2])
             elif isinstance(step, tuple) and step[0] == 'click_image':
+                self.log(f"Procurando imagem na tela: {step[1]}")
                 pos = upg.locate_on_screen(step[1])
                 if pos:
+                    self.log(f"Imagem encontrada em {pos.x}, {pos.y}. Clicando {step[2]}x.")
                     upg.click(pos.x, pos.y, clicks=step[2])
                 else:
+                    self.log(f"Imagem não encontrada: {step[1]}")
                     messagebox.showerror("Erro", f"Imagem não encontrada na tela: {step[1]}")
                     break
             elif isinstance(step, tuple) and step[0] == 'write':
+                self.log(f"Digitando: {step[1]}")
                 upg.write(step[1])
             elif isinstance(step, tuple) and step[0] == 'command':
+                self.log(f"Comando: {step[1]}")
                 keys = [k.strip() for k in step[1].split('+')]
                 if len(keys) == 1:
                     upg.press(keys[0])
                 else:
                     upg.hotkey(*keys)
             elif isinstance(step, tuple) and step[0] == 'open_site':
-                if not driver:
-                    driver = us.start_chrome(headless=True)
-                us.go_to(driver, step[1])
+                self.log(f"Abrindo site (headless): {step[1]}")
+                if not self.driver:
+                    self.driver = us.start_chrome(headless=True)
+                us.go_to(self.driver, step[1])
             elif isinstance(step, tuple) and step[0] == 'open_site_visible':
-                if not driver_visible:
-                    driver_visible = us.start_chrome(headless=False)
-                us.go_to(driver_visible, step[1])
+                self.log(f"Abrindo site (visível): {step[1]}")
+                if not self.driver_visible:
+                    self.driver_visible = us.start_chrome(headless=False)
+                us.go_to(self.driver_visible, step[1])
             elif isinstance(step, tuple) and step[0] == 'js':
-                if driver:
-                    us.execute_js(driver, step[1])
+                self.log(f"Executando JS (headless): {step[1]}")
+                if self.driver:
+                    us.execute_js(self.driver, step[1])
             elif isinstance(step, tuple) and step[0] == 'js_visible':
-                if driver_visible:
-                    us.execute_js(driver_visible, step[1])
+                self.log(f"Executando JS (visível): {step[1]}")
+                if self.driver_visible:
+                    us.execute_js(self.driver_visible, step[1])
             elif isinstance(step, tuple) and step[0] == 'read_excel':
+                self.log(f"Lendo Excel: {step[1]}")
                 data = uf.read_xlsx(step[1])
                 messagebox.showinfo("Excel", f"Conteúdo: {data}")
             elif isinstance(step, tuple) and step[0] == 'timesleep':
+                self.log(f"Aguardando {step[1]} segundos...")
                 time.sleep(step[1])
             elif isinstance(step, tuple) and step[0] == 'no_close_selenium':
-                close_driver = False
-                close_driver_visible = False
+                self.log("Não fechar Selenium ao final do fluxo.")
+                self.close_driver = False
+                self.close_driver_visible = False
             elif isinstance(step, tuple) and step[0] == 'close_selenium':
-                if driver:
-                    us.close(driver)
-                    driver = None
-                if driver_visible:
-                    us.close(driver_visible)
-                    driver_visible = None
-                close_driver = True
-                close_driver_visible = True
-        if close_driver and driver:
-            us.close(driver)
-        if close_driver_visible and driver_visible:
-            us.close(driver_visible)
+                self.log("Fechando Selenium.")
+                if self.driver:
+                    us.close(self.driver)
+                    self.driver = None
+                if self.driver_visible:
+                    us.close(self.driver_visible)
+                    self.driver_visible = None
+                self.close_driver = True
+                self.close_driver_visible = True
+        if self.close_driver and self.driver:
+            self.log("Fechando Selenium (headless) ao final do fluxo.")
+            us.close(self.driver)
+            self.driver = None
+        if self.close_driver_visible and self.driver_visible:
+            self.log("Fechando Selenium (visível) ao final do fluxo.")
+            us.close(self.driver_visible)
+            self.driver_visible = None
+
+    def _describe_step(self, step):
+        # Retorna uma string amigável para o log
+        if isinstance(step, tuple):
+            return str(step)
+        elif isinstance(step, dict) and step.get('type') == 'loop':
+            return f"LOOP ({'∞' if step.get('repeat') is None else step.get('repeat')}x) [{len(step.get('steps', []))} passos]"
+        elif isinstance(step, dict) and step.get('type') == 'read_excel_advanced':
+            return f"Ler Excel Avançado: {step.get('files')}"
+        else:
+            return str(step)
 
     def move_step_up(self):
         sel = self.listbox.curselection()

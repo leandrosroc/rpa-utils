@@ -1,6 +1,12 @@
 [
-  ["open_site_visible", "https://www.google.com.br"],
-  ["timesleep", 2],
-  ["write", "leandrosroc github"],
-  ["command", "enter"]
+  [
+    "open_site_visible",
+    "https://www.linkedin.com/"
+  ],
+  [
+    "no_close_selenium"
+  ],
+  [
+    "close_selenium"
+  ]
 ]

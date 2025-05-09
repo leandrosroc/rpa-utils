@@ -6,6 +6,9 @@ def start_chrome(headless=False):
     options = webdriver.ChromeOptions()
     if headless:
         options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--enable-unsafe-swiftshader')
+    options.add_argument('--log-level=3')  # Suprime logs do ChromeDriver
     driver = webdriver.Chrome(options=options)
     return driver
 
