@@ -33,11 +33,15 @@ class AutomationBuilder:
         tk.Button(self.button_frame, text="Unir CSV", command=self.merge_csv).pack(fill='x')
         tk.Button(self.button_frame, text="Unir TXT", command=self.merge_txt).pack(fill='x')
         tk.Button(self.button_frame, text="Adicionar Time Sleep", command=self.add_timesleep).pack(fill='x')
+        tk.Button(self.button_frame, text="Adicionar Loop", command=self.add_loop).pack(fill='x')
         tk.Button(self.button_frame, text="Não fechar Selenium", command=self.add_no_close_selenium).pack(fill='x')
         tk.Button(self.button_frame, text="Fechar Selenium", command=self.add_close_selenium).pack(fill='x')
         tk.Button(self.button_frame, text="Salvar Fluxo", command=self.save_flow).pack(fill='x', pady=(10,0))
         tk.Button(self.button_frame, text="Restaurar Fluxo", command=self.load_flow).pack(fill='x')
-        tk.Button(self.button_frame, text="Executar Automação", command=self.run_steps).pack(fill='x', pady=(10,0))
+        self.run_btn = tk.Button(self.button_frame, text="Iniciar Automação", command=self.run_steps)
+        self.run_btn.pack(fill='x', pady=(10,0))
+        self.stop_btn = tk.Button(self.button_frame, text="Parar", command=self.stop_runner, state='disabled')
+        self.stop_btn.pack(fill='x')
         tk.Button(self.button_frame, text="Limpar Passos", command=self.clear_steps).pack(fill='x')
         
         # Frame para botões de manipulação de passos
@@ -46,6 +50,9 @@ class AutomationBuilder:
         tk.Button(self.step_ctrl_frame, text="↑ Subir", command=self.move_step_up, width=8).pack(pady=2)
         tk.Button(self.step_ctrl_frame, text="↓ Descer", command=self.move_step_down, width=8).pack(pady=2)
         tk.Button(self.step_ctrl_frame, text="🗑 Apagar", command=self.delete_step, width=8, fg="red").pack(pady=2)
+
+        self._runner_thread = None
+        self._stop_flag = threading.Event()
 
     def add_click(self):
         top = tk.Toplevel(self.master)
@@ -223,6 +230,54 @@ class AutomationBuilder:
         self.steps.append(('close_selenium',))
         self.listbox.insert('end', "Fechar Selenium")
 
+    def add_loop(self):
+        top = tk.Toplevel(self.master)
+        top.title("Adicionar Loop")
+        tk.Label(top, text="Índice inicial do passo (0-based, deixe vazio para 0):").pack()
+        start_entry = tk.Entry(top)
+        start_entry.pack()
+        tk.Label(top, text="Índice final do passo (inclusivo, deixe vazio para último):").pack()
+        end_entry = tk.Entry(top)
+        end_entry.pack()
+        tk.Label(top, text="Repetições (deixe vazio para infinito):").pack()
+        repeat_entry = tk.Entry(top)
+        repeat_entry.pack()
+        def ok():
+            # Ajuste: permite campos vazios para pegar todo o fluxo, mesmo se steps estiver vazio
+            try:
+                start_str = start_entry.get().strip()
+                end_str = end_entry.get().strip()
+                if len(self.steps) == 0:
+                    messagebox.showerror("Erro", "Não há passos para criar loop.")
+                    return
+                start = int(start_str) if start_str != "" else 0
+                end = int(end_str) if end_str != "" else len(self.steps)-1
+                # Permite loop de todo o fluxo se steps não está vazio
+                if start < 0 or end < 0 or start > end or end >= len(self.steps):
+                    raise Exception()
+            except Exception:
+                messagebox.showerror("Erro", "Índices inválidos.")
+                return
+            reps = repeat_entry.get()
+            if reps.strip() == "":
+                reps = None
+            else:
+                try:
+                    reps = int(reps)
+                except Exception:
+                    messagebox.showerror("Erro", "Repetições inválidas.")
+                    return
+            loop_steps = self.steps[start:end+1]
+            for _ in range(end, start-1, -1):
+                del self.steps[_]
+                self.listbox.delete(_)
+            loop_block = {'type': 'loop', 'steps': loop_steps, 'repeat': reps}
+            self.steps.insert(start, loop_block)
+            desc = f"LOOP {'∞' if reps is None else reps}x: {len(loop_steps)} passos"
+            self.listbox.insert(start, desc)
+            top.destroy()
+        tk.Button(top, text="OK", command=ok).pack()
+
     def merge_xlsx(self):
         files = filedialog.askopenfilenames(filetypes=[("Excel files", "*.xlsx")])
         if files:
@@ -272,6 +327,9 @@ class AutomationBuilder:
             for step in self.steps:
                 if isinstance(step, dict) and step.get('type') == 'read_excel_advanced':
                     self.listbox.insert('end', f"Ler Excel Avançado: {step['files']} Linhas:{step['rows']} Cols:{step['cols']} Ação:{step['action']} Param:{step['param']}")
+                elif isinstance(step, dict) and step.get('type') == 'loop':
+                    desc = f"LOOP {'∞' if step['repeat'] is None else step['repeat']}x: {len(step['steps'])} passos"
+                    self.listbox.insert('end', desc)
                 else:
                     self.listbox.insert('end', str(step))
 
@@ -280,110 +338,135 @@ class AutomationBuilder:
         self.listbox.delete(0, 'end')
     
     def run_steps(self):
+        if self._runner_thread and self._runner_thread.is_alive():
+            messagebox.showinfo("Automação", "Já está em execução.")
+            return
+        self._stop_flag.clear()
+        self.run_btn.config(state='disabled')
+        self.stop_btn.config(state='normal')
         def runner():
             driver = None
             driver_visible = None
             close_driver = True
             close_driver_visible = True
-            for step in self.steps:
-                if isinstance(step, dict) and step.get('type') == 'read_excel_advanced':
-                    # Simplificação: só lê e executa ação nas células especificadas
-                    for file in step['files']:
-                        data = uf.read_xlsx(file)
-                        # Interpretação de linhas/colunas
-                        def parse_range(val):
-                            if '-' in val:
-                                a, b = val.split('-')
-                                try:
-                                    return list(range(int(a), int(b)+1))
-                                except:
-                                    # Letras
-                                    return [chr(c) for c in range(ord(a.upper()), ord(b.upper())+1)]
-                            elif ',' in val:
-                                return [v.strip() for v in val.split(',')]
-                            elif val:
-                                try:
-                                    return [int(val)]
-                                except:
-                                    return [val]
-                            return []
-                        rows = parse_range(step.get('rows',''))
-                        cols = parse_range(step.get('cols',''))
-                        # Se não especificado, pega tudo
-                        if not rows: rows = range(1, len(data))
-                        if not cols: cols = range(len(data[0]))
-                        for r in rows:
-                            for c in cols:
-                                try:
-                                    # Suporte a letras de coluna
-                                    if isinstance(c, str) and c.isalpha():
-                                        cidx = ord(c.upper()) - ord('A')
-                                    else:
-                                        cidx = int(c)
-                                    val = data[int(r)][cidx]
-                                except Exception:
-                                    val = ""
-                                if step['action'] == 'digitar':
-                                    upg.write(str(val))
-                                elif step['action'] == 'clicar':
-                                    upg.click(str(val))
-                                elif step['action'] == 'comando':
-                                    upg.press(str(val))
-                elif step[0] == 'click':
-                    upg.click(step[1], step[2])
-                elif step[0] == 'click_image':
-                    pos = upg.locate_on_screen(step[1])
-                    if pos:
-                        upg.click(pos.x, pos.y, clicks=step[2])
-                    else:
-                        messagebox.showerror("Erro", f"Imagem não encontrada na tela: {step[1]}")
-                        break
-                elif step[0] == 'write':
-                    upg.write(step[1])
-                elif step[0] == 'command':
-                    keys = [k.strip() for k in step[1].split('+')]
-                    if len(keys) == 1:
-                        upg.press(keys[0])
-                    else:
-                        upg.hotkey(*keys)
-                elif step[0] == 'open_site':
-                    if not driver:
-                        driver = us.start_chrome(headless=True)
-                    us.go_to(driver, step[1])
-                elif step[0] == 'open_site_visible':
-                    if not driver_visible:
-                        driver_visible = us.start_chrome(headless=False)
-                    us.go_to(driver_visible, step[1])
-                elif step[0] == 'js':
-                    if driver:
-                        us.execute_js(driver, step[1])
-                elif step[0] == 'js_visible':
-                    if driver_visible:
-                        us.execute_js(driver_visible, step[1])
-                elif step[0] == 'read_excel':
-                    data = uf.read_xlsx(step[1])
-                    messagebox.showinfo("Excel", f"Conteúdo: {data}")
-                elif step[0] == 'timesleep':
-                    time.sleep(step[1])
-                elif step[0] == 'no_close_selenium':
-                    close_driver = False
-                    close_driver_visible = False
-                elif step[0] == 'close_selenium':
-                    if driver:
-                        us.close(driver)
-                        driver = None
-                    if driver_visible:
-                        us.close(driver_visible)
-                        driver_visible = None
-                    close_driver = True
-                    close_driver_visible = True
-            # Fechar drivers apenas se permitido
-            if close_driver and driver:
-                us.close(driver)
-            if close_driver_visible and driver_visible:
-                us.close(driver_visible)
-            messagebox.showinfo("Automação", "Fluxo finalizado!")
-        threading.Thread(target=runner).start()
+            try:
+                self._execute_steps(self.steps, driver, driver_visible, close_driver, close_driver_visible)
+                messagebox.showinfo("Automação", "Fluxo finalizado!")
+            except StopIteration:
+                messagebox.showinfo("Automação", "Execução interrompida pelo usuário.")
+            finally:
+                self.run_btn.config(state='normal')
+                self.stop_btn.config(state='disabled')
+        self._runner_thread = threading.Thread(target=runner)
+        self._runner_thread.start()
+
+    def stop_runner(self):
+        self._stop_flag.set()
+
+    def _execute_steps(self, steps, driver, driver_visible, close_driver, close_driver_visible):
+        for step in steps:
+            if self._stop_flag.is_set():
+                raise StopIteration()
+            if isinstance(step, dict) and step.get('type') == 'loop':
+                reps = step.get('repeat')
+                count = 0
+                while reps is None or count < reps:
+                    if self._stop_flag.is_set():
+                        raise StopIteration()
+                    self._execute_steps(step['steps'], driver, driver_visible, close_driver, close_driver_visible)
+                    count += 1
+            elif isinstance(step, dict) and step.get('type') == 'read_excel_advanced':
+                for file in step['files']:
+                    data = uf.read_xlsx(file)
+                    def parse_range(val):
+                        if '-' in val:
+                            a, b = val.split('-')
+                            try:
+                                return list(range(int(a), int(b)+1))
+                            except:
+                                return [chr(c) for c in range(ord(a.upper()), ord(b.upper())+1)]
+                        elif ',' in val:
+                            return [v.strip() for v in val.split(',')]
+                        elif val:
+                            try:
+                                return [int(val)]
+                            except:
+                                return [val]
+                        return []
+                    rows = parse_range(step.get('rows',''))
+                    cols = parse_range(step.get('cols',''))
+                    if not rows: rows = range(1, len(data))
+                    if not cols: cols = range(len(data[0]))
+                    for r in rows:
+                        for c in cols:
+                            if self._stop_flag.is_set():
+                                raise StopIteration()
+                            try:
+                                if isinstance(c, str) and c.isalpha():
+                                    cidx = ord(c.upper()) - ord('A')
+                                else:
+                                    cidx = int(c)
+                                val = data[int(r)][cidx]
+                            except Exception:
+                                val = ""
+                            if step['action'] == 'digitar':
+                                upg.write(str(val))
+                            elif step['action'] == 'clicar':
+                                upg.click(str(val))
+                            elif step['action'] == 'comando':
+                                upg.press(str(val))
+            elif isinstance(step, tuple) and step[0] == 'click':
+                upg.click(step[1], step[2])
+            elif isinstance(step, tuple) and step[0] == 'click_image':
+                pos = upg.locate_on_screen(step[1])
+                if pos:
+                    upg.click(pos.x, pos.y, clicks=step[2])
+                else:
+                    messagebox.showerror("Erro", f"Imagem não encontrada na tela: {step[1]}")
+                    break
+            elif isinstance(step, tuple) and step[0] == 'write':
+                upg.write(step[1])
+            elif isinstance(step, tuple) and step[0] == 'command':
+                keys = [k.strip() for k in step[1].split('+')]
+                if len(keys) == 1:
+                    upg.press(keys[0])
+                else:
+                    upg.hotkey(*keys)
+            elif isinstance(step, tuple) and step[0] == 'open_site':
+                if not driver:
+                    driver = us.start_chrome(headless=True)
+                us.go_to(driver, step[1])
+            elif isinstance(step, tuple) and step[0] == 'open_site_visible':
+                if not driver_visible:
+                    driver_visible = us.start_chrome(headless=False)
+                us.go_to(driver_visible, step[1])
+            elif isinstance(step, tuple) and step[0] == 'js':
+                if driver:
+                    us.execute_js(driver, step[1])
+            elif isinstance(step, tuple) and step[0] == 'js_visible':
+                if driver_visible:
+                    us.execute_js(driver_visible, step[1])
+            elif isinstance(step, tuple) and step[0] == 'read_excel':
+                data = uf.read_xlsx(step[1])
+                messagebox.showinfo("Excel", f"Conteúdo: {data}")
+            elif isinstance(step, tuple) and step[0] == 'timesleep':
+                time.sleep(step[1])
+            elif isinstance(step, tuple) and step[0] == 'no_close_selenium':
+                close_driver = False
+                close_driver_visible = False
+            elif isinstance(step, tuple) and step[0] == 'close_selenium':
+                if driver:
+                    us.close(driver)
+                    driver = None
+                if driver_visible:
+                    us.close(driver_visible)
+                    driver_visible = None
+                close_driver = True
+                close_driver_visible = True
+        if close_driver and driver:
+            us.close(driver)
+        if close_driver_visible and driver_visible:
+            us.close(driver_visible)
 
     def move_step_up(self):
         sel = self.listbox.curselection()
@@ -416,7 +499,6 @@ class AutomationBuilder:
         idx = sel[0]
         del self.steps[idx]
         self.listbox.delete(idx)
-        # Seleciona o próximo passo, se existir
         if self.listbox.size() > 0:
             next_idx = min(idx, self.listbox.size()-1)
             self.listbox.selection_set(next_idx)
