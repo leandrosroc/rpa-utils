@@ -11,6 +11,13 @@ __pycache__/
 *.bak
 *.swp
 *.swo
+*.pkg
+*.toc
+*.zip
+*.spec
+*pyz
+*.txt
+*.html
 *.~ 
 # Ignore Excel/CSV/TXT de exemplo
 exemplo.xlsx
